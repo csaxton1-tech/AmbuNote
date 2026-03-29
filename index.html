@@ -30,7 +30,7 @@
 
     .app {
       width: 100%;
-      max-width: 900px;
+      max-width: 960px;
       background: #ffffff;
       border-radius: 18px;
       box-shadow: 0 18px 40px rgba(0, 0, 0, 0.08);
@@ -106,7 +106,7 @@
     main {
       margin-top: 0.75rem;
       display: grid;
-      grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr);
+      grid-template-columns: minmax(0, 2fr) minmax(0, 1.3fr);
       gap: 1.5rem;
     }
 
@@ -206,12 +206,34 @@
       background: #e5f5ec;
     }
 
+    .confidence-bar-wrapper {
+      margin-top: 0.4rem;
+      font-size: 0.75rem;
+      color: #4b6b57;
+    }
+
+    .confidence-bar {
+      margin-top: 0.25rem;
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: #e5f5ec;
+      overflow: hidden;
+    }
+
+    .confidence-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #facc15, #22c55e);
+      transition: width 0.15s ease;
+    }
+
     .transcript-box {
       margin-top: 0.4rem;
       border-radius: 10px;
       background: #ffffff;
       border: 1px solid #e5f5ec;
-      max-height: 320px;
+      max-height: 360px;
       overflow-y: auto;
       padding: 0.6rem 0.75rem;
       font-size: 0.85rem;
@@ -230,7 +252,7 @@
     }
 
     .timestamp {
-      font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-family: ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 0.78rem;
       color: var(--green-dark);
       padding: 0.1rem 0.45rem;
@@ -243,6 +265,12 @@
     .sentence {
       color: #1f2933;
       line-height: 1.4;
+    }
+
+    .speaker-label {
+      font-weight: 600;
+      color: var(--green-dark);
+      margin-right: 0.25rem;
     }
 
     .empty-state {
@@ -271,6 +299,12 @@
       padding: 0.4rem 0.6rem;
       border: 1px solid #facc15;
     }
+
+    .interim {
+      opacity: 0.6;
+      font-style: italic;
+      margin-top: 0.25rem;
+    }
   </style>
 </head>
 <body>
@@ -293,28 +327,31 @@
       <section class="controls-card">
         <h2>Recording controls</h2>
         <p class="hint">
-          Start speaking and AMBUNOTE will build a timestamped transcript. Stop when you’re done, then download as text.
+          Start speaking and AMBUNOTE will build a timestamped transcript with live updates and confidence feedback.
         </p>
 
         <div class="buttons-row">
-          <button id="startBtn" class="btn-primary">
-            ▶ Start recording
-          </button>
-          <button id="stopBtn" class="btn-secondary" disabled>
-            ■ Stop recording
-          </button>
-          <button id="downloadBtn" class="btn-secondary" disabled>
-            ⬇ Download transcript
-          </button>
-          <button id="clearBtn" class="btn-secondary">
-            ✕ Clear
-          </button>
+          <button id="startBtn" class="btn-primary">▶ Start recording</button>
+          <button id="stopBtn" class="btn-secondary" disabled>■ Stop recording</button>
+          <button id="downloadBtn" class="btn-secondary" disabled>⬇ Download transcript</button>
+          <button id="clearBtn" class="btn-secondary">✕ Clear</button>
         </div>
 
         <div class="meta-row">
           <div><span class="meta-label">Session length:</span> <span id="timer">00:00</span></div>
           <div class="meta-pill">
             <span class="meta-label">Sentences:</span> <span id="sentenceCount">0</span>
+          </div>
+          <div class="meta-pill">
+            <span class="meta-label">Speaker:</span> <span id="speakerLabel">A</span>
+          </div>
+        </div>
+
+        <div class="confidence-bar-wrapper">
+          <span class="meta-label">Recognition confidence:</span>
+          <span id="confidenceText">–</span>
+          <div class="confidence-bar">
+            <div id="confidenceFill" class="confidence-fill"></div>
           </div>
         </div>
 
@@ -327,7 +364,7 @@
       <section class="transcript-card">
         <h2>Transcript</h2>
         <p class="hint">
-          Each line is timestamped from when you started this recording session.
+          Each line is timestamped from when you started this recording session. Tap the speaker label to toggle A/B.
         </p>
         <div id="transcriptBox" class="transcript-box">
           <div id="emptyState" class="empty-state">
@@ -342,7 +379,6 @@
   </div>
 
   <script>
-    // Basic feature detection
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
@@ -356,12 +392,22 @@
     const sentenceCountEl = document.getElementById("sentenceCount");
     const statusPill = document.getElementById("statusPill");
     const statusText = document.getElementById("statusText");
+    const confidenceFill = document.getElementById("confidenceFill");
+    const confidenceText = document.getElementById("confidenceText");
+    const speakerLabelEl = document.getElementById("speakerLabel");
 
     let recognition = null;
     let isRecording = false;
     let startTime = null;
     let timerInterval = null;
     let sentences = [];
+    let currentSpeaker = "A";
+
+    // Toggle speaker label manually (simple A/B)
+    speakerLabelEl.addEventListener("click", () => {
+      currentSpeaker = currentSpeaker === "A" ? "B" : "A";
+      speakerLabelEl.textContent = currentSpeaker;
+    });
 
     function setStatus(recording) {
       isRecording = recording;
@@ -375,12 +421,8 @@
     }
 
     function formatTime(seconds) {
-      const m = Math.floor(seconds / 60)
-        .toString()
-        .padStart(2, "0");
-      const s = Math.floor(seconds % 60)
-        .toString()
-        .padStart(2, "0");
+      const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+      const s = Math.floor(seconds % 60).toString().padStart(2, "0");
       return `${m}:${s}`;
     }
 
@@ -404,13 +446,54 @@
       }
     }
 
-    function addSentence(text, offsetSeconds) {
+    function autoPunctuate(text) {
+      const trimmed = text.trim();
+      if (!trimmed) return "";
+      if (!/[.!?]$/.test(trimmed)) {
+        return trimmed + ".";
+      }
+      return trimmed;
+    }
+
+    function updateConfidence(conf) {
+      if (isNaN(conf)) {
+        confidenceFill.style.width = "0%";
+        confidenceText.textContent = "–";
+        return;
+      }
+      const pct = Math.round(conf * 100);
+      confidenceFill.style.width = pct + "%";
+      confidenceText.textContent = pct + "%";
+    }
+
+    function updateInterim(text) {
+      let interimEl = document.getElementById("interimLine");
+      if (!interimEl) {
+        interimEl = document.createElement("div");
+        interimEl.id = "interimLine";
+        interimEl.className = "interim";
+        transcriptBox.appendChild(interimEl);
+      }
+      interimEl.textContent = text;
+      transcriptBox.scrollTop = transcriptBox.scrollHeight;
+    }
+
+    function clearInterim() {
+      const interimEl = document.getElementById("interimLine");
+      if (interimEl) interimEl.remove();
+    }
+
+    function addSentence(text, offsetSeconds, speaker, confidence) {
       const trimmed = text.trim();
       if (!trimmed) return;
 
+      // Basic noise filtering: ignore very short, low-confidence fragments
+      if (trimmed.split(/\s+/).length <= 2 && confidence < 0.5) {
+        return;
+      }
+
       const timestamp = formatTime(offsetSeconds);
-      sentences.push({ timestamp, text: trimmed });
-      sentenceCountEl.textContent = sentences.length.toString();
+      sentences.push({ timestamp, text: trimmed, speaker, confidence });
 
       if (emptyState) {
         emptyState.remove();
@@ -425,19 +508,31 @@
 
       const sentenceSpan = document.createElement("span");
       sentenceSpan.className = "sentence";
-      sentenceSpan.textContent = trimmed;
+
+      const speakerSpan = document.createElement("span");
+      speakerSpan.className = "speaker-label";
+      speakerSpan.textContent = "Speaker " + speaker + ":";
+
+      sentenceSpan.appendChild(speakerSpan);
+      sentenceSpan.appendChild(document.createTextNode(" " + trimmed));
 
       line.appendChild(tsSpan);
       line.appendChild(sentenceSpan);
       transcriptBox.appendChild(line);
 
       transcriptBox.scrollTop = transcriptBox.scrollHeight;
+      sentenceCountEl.textContent = sentences.length.toString();
       downloadBtn.disabled = sentences.length === 0;
     }
 
     function buildDownloadText() {
       return sentences
-        .map((s) => `[${s.timestamp}] ${s.text}`)
+        .map(
+          (s) =>
+            `[${s.timestamp}] Speaker ${s.speaker}: ${s.text} (confidence: ${
+              s.confidence != null ? s.confidence.toFixed(2) : "n/a"
+            })`
+        )
         .join("\n");
     }
 
@@ -452,6 +547,8 @@
         "No transcript yet. Press “Start recording” and begin speaking.";
       transcriptBox.appendChild(es);
       downloadBtn.disabled = true;
+      clearInterim();
+      updateConfidence(NaN);
     }
 
     function initRecognition() {
@@ -466,25 +563,51 @@
       }
 
       recognition = new SpeechRecognition();
-      recognition.lang = "en-GB"; // adjust if you like
-      recognition.continuous = true; // allow long sessions
-      recognition.interimResults = false; // only final results
+      recognition.lang = "en-GB";
+      recognition.continuous = true;
+      recognition.interimResults = true;
 
       recognition.addEventListener("result", (event) => {
         if (!startTime) return;
+
+        let finalText = "";
+        let interimText = "";
+        let lastConfidence = null;
+
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const res = event.results[i];
+          const alt = res[0];
+          const text = alt.transcript.trim();
+          const conf = typeof alt.confidence === "number" ? alt.confidence : null;
+
           if (res.isFinal) {
-            const transcript = res[0].transcript;
-            const offsetSeconds = (Date.now() - startTime) / 1000;
-            // Treat each final result as a "sentence"
-            addSentence(transcript, offsetSeconds);
+            finalText += text + " ";
+            lastConfidence = conf;
+          } else {
+            interimText += text + " ";
+            if (conf != null) lastConfidence = conf;
           }
+        }
+
+        if (interimText) {
+          updateInterim(interimText);
+        } else {
+          clearInterim();
+        }
+
+        if (lastConfidence != null) {
+          updateConfidence(lastConfidence);
+        }
+
+        if (finalText) {
+          const cleaned = autoPunctuate(finalText);
+          const offsetSeconds = (Date.now() - startTime) / 1000;
+          addSentence(cleaned, offsetSeconds, currentSpeaker, lastConfidence ?? 1);
+          clearInterim();
         }
       });
 
       recognition.addEventListener("end", () => {
-        // If it ended unexpectedly while we think we're recording, try to restart
         if (isRecording) {
           try {
             recognition.start();
@@ -508,7 +631,7 @@
       try {
         recognition.start();
       } catch (e) {
-        // start may throw if already started; ignore
+        // ignore if already started
       }
 
       setStatus(true);
@@ -519,12 +642,13 @@
 
     stopBtn.addEventListener("click", () => {
       if (!recognition) return;
-      recognition.onend = null; // prevent auto-restart
+      recognition.onend = null;
       recognition.stop();
       setStatus(false);
       startBtn.disabled = false;
       stopBtn.disabled = true;
       stopTimer();
+      clearInterim();
     });
 
     downloadBtn.addEventListener("click", () => {
@@ -535,10 +659,7 @@
       const a = document.createElement("a");
       a.href = url;
       const now = new Date();
-      const stamp = now
-        .toISOString()
-        .replace(/[:]/g, "-")
-        .slice(0, 19);
+      const stamp = now.toISOString().replace(/[:]/g, "-").slice(0, 19);
       a.download = `AMBUNOTE-${stamp}.txt`;
       document.body.appendChild(a);
       a.click();
@@ -550,7 +671,7 @@
       clearTranscript();
     });
 
-    // Initialize immediately so we can fail fast if unsupported
+    // Initialize early so unsupported browsers fail fast
     initRecognition();
   </script>
 </body>
